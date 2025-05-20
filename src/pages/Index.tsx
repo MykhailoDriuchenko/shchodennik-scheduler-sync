@@ -6,27 +6,42 @@ import { EventForm } from "@/components/EventForm";
 import { EventList } from "@/components/EventList";
 import { Event } from "@/types/event";
 import { 
-  loadEvents, 
-  saveEvents, 
   checkEventConflicts, 
   getUpcomingEvent,
   countAllConflicts
 } from "@/lib/events";
 import { useToast } from "@/hooks/use-toast";
 import { addDays } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
+import { 
+  getEvents,
+  addEvent as addEventToSupabase,
+  deleteEvent as deleteEventFromSupabase,
+  updateEvent as updateEventInSupabase
+} from "@/services/eventService";
 
 const Index = () => {
   const [events, setEvents] = useState<Event[]>([]);
   const [currentView, setCurrentView] = useState<string>("new");
   const [upcomingEvent, setUpcomingEvent] = useState<Event | null>(null);
   const [conflictCount, setConflictCount] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
+  const { user } = useAuth();
 
-  // Load events on initial render
+  // Load events from Supabase on initial render
   useEffect(() => {
-    const savedEvents = loadEvents();
-    setEvents(savedEvents);
-  }, []);
+    const fetchEvents = async () => {
+      if (user) {
+        setIsLoading(true);
+        const fetchedEvents = await getEvents(user.id);
+        setEvents(fetchedEvents);
+        setIsLoading(false);
+      }
+    };
+    
+    fetchEvents();
+  }, [user]);
 
   // Check for upcoming events and conflicts when events change
   useEffect(() => {
@@ -38,32 +53,55 @@ const Index = () => {
       // Count conflicts
       const conflicts = countAllConflicts(events);
       setConflictCount(conflicts);
-      
-      // Save to local storage
-      saveEvents(events);
     } else {
       setUpcomingEvent(null);
       setConflictCount(0);
     }
   }, [events]);
 
-  const handleAddEvent = (event: Event) => {
-    setEvents([...events, event]);
-    toast({
-      title: "Подію додано",
-      description: `${event.title} на ${event.startTime}`,
-    });
-    setCurrentView("list");
+  const handleAddEvent = async (event: Event) => {
+    if (!user) return;
+    
+    const newEvent = await addEventToSupabase(event, user.id);
+    
+    if (newEvent) {
+      setEvents([...events, newEvent]);
+      toast({
+        title: "Подію додано",
+        description: `${event.title} на ${event.startTime}`,
+      });
+      setCurrentView("list");
+    } else {
+      toast({
+        title: "Помилка",
+        description: "Не вдалося додати подію",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleDeleteEvent = (id: string) => {
-    setEvents(events.filter(event => event.id !== id));
-    toast({
-      title: "Подію видалено",
-    });
+  const handleDeleteEvent = async (id: string) => {
+    if (!user) return;
+    
+    const success = await deleteEventFromSupabase(id, user.id);
+    
+    if (success) {
+      setEvents(events.filter(event => event.id !== id));
+      toast({
+        title: "Подію видалено",
+      });
+    } else {
+      toast({
+        title: "Помилка",
+        description: "Не вдалося видалити подію",
+        variant: "destructive"
+      });
+    }
   };
 
-  const handleRescheduleEvent = (id: string) => {
+  const handleRescheduleEvent = async (id: string) => {
+    if (!user) return;
+    
     // Find the event to reschedule
     const eventToReschedule = events.find(event => event.id === id);
     
@@ -75,14 +113,35 @@ const Index = () => {
         date: addDays(new Date(), 1), // Set date to tomorrow
       };
       
-      setEvents([...events.filter(event => event.id !== id), rescheduledEvent]);
+      const newEvent = await addEventToSupabase(rescheduledEvent, user.id);
+      const success = await deleteEventFromSupabase(id, user.id);
       
-      toast({
-        title: "Подію перенесено",
-        description: `${eventToReschedule.title} перенесено на завтра`,
-      });
+      if (newEvent && success) {
+        setEvents([...events.filter(event => event.id !== id), newEvent]);
+        
+        toast({
+          title: "Подію перенесено",
+          description: `${eventToReschedule.title} перенесено на завтра`,
+        });
+      } else {
+        toast({
+          title: "Помилка",
+          description: "Не вдалося перенести подію",
+          variant: "destructive"
+        });
+      }
     }
   };
+
+  const handleSignOut = async () => {
+    // This will be implemented in JournalSidebar
+  };
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center min-h-screen">
+      <p>Завантаження...</p>
+    </div>;
+  }
 
   return (
     <div className="flex min-h-screen bg-journal-light">
